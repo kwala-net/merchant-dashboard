@@ -1,0 +1,42 @@
+[
+  {
+    "id": "evt_1",
+    "name": "PaymentReceived emitted",
+    "subtitle": "Sepolia · 0x9B7D...8B",
+    "tag": "trigger",
+    "tagColor": "green",
+    "status": "success"
+  },
+  {
+    "id": "evt_2",
+    "name": "ComputeEngine called",
+    "subtitle": "KalpChain · classify payment",
+    "tag": "fn",
+    "tagColor": "blue",
+    "status": "success"
+  },
+  {
+    "id": "evt_3",
+    "name": "PaymentClassified emitted",
+    "subtitle": "HIGH_VALUE · $45,000",
+    "tag": "event",
+    "tagColor": "purple",
+    "status": "success"
+  },
+  {
+    "id": "evt_4",
+    "name": "POST /api/payments/sync",
+    "subtitle": "offchain DB updated · 42ms",
+    "tag": "sync",
+    "tagColor": "green",
+    "status": "success"
+  },
+  {
+    "id": "evt_5",
+    "name": "POST /api/webhook/kwala",
+    "subtitle": "502 · retry 2/5 pending",
+    "tag": "retry",
+    "tagColor": "red",
+    "status": "failed"
+  }
+]

@@ -1,0 +1,8 @@
+[
+  { "method": "POST", "endpoint": "/api/payments/sync", "statusCode": 200, "latencyMs": 42, "healthy": true },
+  { "method": "POST", "endpoint": "/api/webhook/kwala", "statusCode": 502, "latencyMs": null, "healthy": false },
+  { "method": "GET", "endpoint": "/api/payments/status", "statusCode": 200, "latencyMs": 18, "healthy": true },
+  { "method": "POST", "endpoint": "/api/refunds/initiate", "statusCode": 200, "latencyMs": 1200, "healthy": true, "slow": true },
+  { "method": "GET", "endpoint": "/api/merchant/balance", "statusCode": 200, "latencyMs": 22, "healthy": true },
+  { "method": "POST", "endpoint": "/api/notifications/send", "statusCode": 200, "latencyMs": 71, "healthy": true }
+]

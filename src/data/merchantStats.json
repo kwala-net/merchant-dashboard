@@ -1,0 +1,12 @@
+{
+  "volume24h": 84210,
+  "volume24hChange": 12,
+  "totalPayments": 347,
+  "successRate": 94.2,
+  "webhookCalls": 341,
+  "webhookFailed": 6,
+  "syncLagMs": 1400,
+  "merchantAddress": "0x742d35Cc6634C0532925a3b844Bc454e4438f44e",
+  "merchantName": "Acme Corp",
+  "tier": "GROWTH"
+}

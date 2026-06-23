@@ -1,0 +1,9 @@
+{
+  "paymentEventsCapture": { "completed": 347, "total": 347 },
+  "kwalaFunctionProcessed": { "completed": 347, "total": 347 },
+  "backendDbSynced": { "completed": 341, "total": 347 },
+  "webhookDelivered": { "completed": 341, "total": 347 },
+  "merchantDashboardUpdated": { "completed": 341, "total": 347 },
+  "pendingKwalaRetry": 6,
+  "avgSyncLatencyMs": 1400
+}
