@@ -1,21 +1,5 @@
 import React from 'react';
-
-export interface Payment {
-  paymentId: string;
-  payer: string;
-  amount: number;
-  token: string;
-  timestamp: number;
-  status: string;
-  classification: string;
-  txHash: string;
-  webhookRetryCount: number;
-  syncLatencyMs: number;
-  countryCode: string;
-  processorFee: number;
-  networkFee: number;
-  blockNumber: number;
-}
+import type { Payment } from '@/types';
 
 interface LivePaymentFeedProps {
   payments: Payment[];
