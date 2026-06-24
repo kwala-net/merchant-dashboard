@@ -10,11 +10,19 @@ pragma solidity ^0.8.24;
  * ─────────────────────
  *  • Every inbound payment is stored as a Payment struct keyed by a deterministic bytes32 id.
  *  • Merchants are independently registered with configurable thresholds and daily limits.
- *  • Velocity windows prevent rapid-fire payment spam from a single payer/merchant pair.
+ *  • Velocity windows flag rapid-fire payments from a single payer/merchant pair.
  *  • Off-chain services call recordSync / recordWebhookAttempt to keep on-chain audit trails.
  *  • Refunds follow a request→approve/reject lifecycle; approved refunds emit events consumed
  *    by the dashboard.
  *  • Role-based access: owner > operator > classifier, plus a global pause switch.
+ *
+ * Changes in this revision
+ * ────────────────────────
+ *  1. Velocity breaches in receivePayment are now RECORDED and flagged SUSPICIOUS
+ *     instead of reverting, so they surface on the dashboard (see receivePayment +
+ *     _checkAndUpdateVelocity).
+ *  2. Added an overloaded, self-classifying classifyPayment(bytes32) so Kwala can
+ *     trigger classification with only the paymentId from the PaymentReceived event.
  */
 contract MerchantPayments {
     // =========================================================================
@@ -73,8 +81,6 @@ contract MerchantPayments {
 
     /**
      * @notice Complete on-chain record for a single payment.
-     * @dev    Fields are packed loosely to aid readability; the compiler will
-     *         reorder for optimal slot usage in memory layouts automatically.
      */
     struct Payment {
         bytes32              paymentId;
@@ -290,7 +296,8 @@ contract MerchantPayments {
 
     /**
      * @notice Accounts that can perform operator-level actions (approve/reject
-     *         refunds, update merchant config, record syncs and webhook attempts).
+     *         refunds, update merchant config, record syncs and webhook attempts,
+     *         and trigger self-classification).
      */
     mapping(address => bool) public operatorRole;
 
@@ -480,6 +487,10 @@ contract MerchantPayments {
      * @dev    This function does NOT transfer tokens — token custody remains with
      *         the caller / bridge. The contract records the intent and metadata
      *         so that off-chain systems and on-chain audits stay consistent.
+     *
+     *         CHANGE: A velocity-window breach no longer reverts. The payment is
+     *         still recorded, then flagged SUSPICIOUS in the auto-classify block,
+     *         so the dashboard can surface it. The daily-limit check still reverts.
      * @param merchant      Registered merchant address.
      * @param token         ERC20 token address (use address(0) for native ETH).
      * @param amount        Payment amount in token-smallest-units.
@@ -507,7 +518,7 @@ contract MerchantPayments {
             "MerchantPayments: token not allowed for merchant"
         );
 
-        // --- Daily limit check -----------------------------------------------
+        // --- Daily limit check (still a hard revert) -------------------------
         _resetDailyIfNeeded(merchant);
         bool limitExceeded = _checkDailyLimit(merchant, amount);
         if (limitExceeded) {
@@ -519,17 +530,10 @@ contract MerchantPayments {
             revert("MerchantPayments: daily limit exceeded");
         }
 
-        // --- Velocity check ---------------------------------------------------
-        bool velocityExceeded = _checkAndUpdateVelocity(msg.sender, merchant);
-        if (velocityExceeded) {
-            emit SuspiciousActivityDetected(
-                msg.sender,
-                merchant,
-                amount,
-                "velocity limit exceeded"
-            );
-            revert("MerchantPayments: velocity limit exceeded");
-        }
+        // --- Velocity check (no longer reverts) ------------------------------
+        // The window counter is always advanced; a breach is recorded and the
+        // resulting payment is flagged SUSPICIOUS in the auto-classify block.
+        bool velocityExceeded = _checkAndUpdateVelocity(msg.sender, merchant, amount);
 
         // --- Generate unique payment id --------------------------------------
         paymentId = _generatePaymentId(msg.sender, merchant, amount, block.timestamp);
@@ -580,8 +584,19 @@ contract MerchantPayments {
         totalGlobalVolume   += amount;
         totalGlobalPayments += 1;
 
-        // --- Auto-classify based on thresholds --------------------------------
-        if (cfg.suspiciousThreshold > 0 && amount >= cfg.suspiciousThreshold) {
+        // --- Auto-classify ----------------------------------------------------
+        // Precedence: velocity breach > amount-suspicious > high-value > (standard).
+        // A payment that trips none of these stays UNCLASSIFIED here and is mapped
+        // to STANDARD when classifyPayment(bytes32) runs.
+        if (velocityExceeded) {
+            payments[paymentId].classification = PaymentClassification.SUSPICIOUS;
+            emit SuspiciousActivityDetected(
+                msg.sender,
+                merchant,
+                amount,
+                "velocity limit exceeded"
+            );
+        } else if (cfg.suspiciousThreshold > 0 && amount >= cfg.suspiciousThreshold) {
             payments[paymentId].classification = PaymentClassification.SUSPICIOUS;
             emit SuspiciousActivityDetected(
                 msg.sender,
@@ -627,7 +642,7 @@ contract MerchantPayments {
     // =========================================================================
 
     /**
-     * @notice Assign or override the risk classification for a payment.
+     * @notice Assign or override the risk classification for a payment (manual).
      * @param paymentId       Payment to classify.
      * @param classification  The new PaymentClassification value.
      */
@@ -660,6 +675,47 @@ contract MerchantPayments {
                 "classifier flagged suspicious"
             );
         }
+    }
+
+    /**
+     * @notice Self-classifying overload — reads the classification that
+     *         receivePayment already computed and stored, then emits
+     *         PaymentClassified. Designed to be called by Kwala with only the
+     *         paymentId from the PaymentReceived event (targetParams: [re.event(0)]).
+     * @dev    Overloaded by arity: this is classifyPayment(bytes32), distinct from
+     *         classifyPayment(bytes32,PaymentClassification). When wiring Kwala,
+     *         use the full signature `function classifyPayment(bytes32 paymentId)`
+     *         so the correct selector is resolved.
+     *
+     *         UNCLASSIFIED (a payment that tripped no rule) is normalised to
+     *         STANDARD here so the dashboard shows three concrete buckets. The
+     *         SUSPICIOUS/HIGH_VALUE values come straight from stored state set in
+     *         receivePayment; this function does not re-run the heuristics. It also
+     *         does not re-emit SuspiciousActivityDetected, since receivePayment
+     *         already emitted it at intake.
+     * @param paymentId  Payment to classify.
+     */
+    function classifyPayment(bytes32 paymentId) external onlyOperator {
+        Payment storage p = payments[paymentId];
+        require(p.paymentId == paymentId, "MerchantPayments: payment not found");
+        require(
+            p.status != PaymentStatus.REFUNDED,
+            "MerchantPayments: cannot classify refunded payment"
+        );
+
+        PaymentClassification c = p.classification == PaymentClassification.UNCLASSIFIED
+            ? PaymentClassification.STANDARD
+            : p.classification;
+
+        p.classification = c;
+
+        PaymentStatus old = p.status;
+        if (p.status == PaymentStatus.CONFIRMED || p.status == PaymentStatus.PENDING) {
+            p.status = PaymentStatus.CLASSIFIED;
+            emit PaymentStatusUpdated(paymentId, old, PaymentStatus.CLASSIFIED);
+        }
+
+        emit PaymentClassified(paymentId, c, p.merchant, p.amount);
     }
 
     // =========================================================================
@@ -880,6 +936,7 @@ contract MerchantPayments {
 
     /**
      * @notice Grant the operator role to `op`.
+     * @dev    Kwala's executor wallet needs this role to call classifyPayment(bytes32).
      * @param op  Address to promote.
      */
     function addOperator(address op) external onlyOwner {
@@ -1054,7 +1111,7 @@ contract MerchantPayments {
         bool windowActive = (block.timestamp - vw.windowStart) < cfg.velocityWindowSeconds;
         if (!windowActive) return false;
 
-        return vw.paymentCount >= cfg.maxPaymentsPerWindow;
+        return vw.paymentCount > cfg.maxPaymentsPerWindow;
     }
 
     /**
@@ -1168,14 +1225,18 @@ contract MerchantPayments {
 
     /**
      * @notice Evaluate and update the payer/merchant velocity window.
-     * @dev    Resets the window if it has expired, then increments the counter.
-     *         Returns true only if the window limit was already reached BEFORE
-     *         this call (i.e., the payment should be blocked).
+     * @dev    CHANGE: this no longer gates execution. It always advances the
+     *         window counter (and total amount) for the incoming payment and
+     *         reports whether the cap had already been reached BEFORE this
+     *         payment — i.e. whether this payment is a breach. The caller
+     *         (receivePayment) uses the return value to flag SUSPICIOUS rather
+     *         than to revert.
      * @param payer     Payer address.
      * @param merchant  Merchant address.
-     * @return exceeded True if the payment would exceed the velocity limit.
+     * @param amount    Payment amount (tracked in the window total).
+     * @return exceeded True if the velocity cap was already met before this payment.
      */
-    function _checkAndUpdateVelocity(address payer, address merchant)
+    function _checkAndUpdateVelocity(address payer, address merchant, uint256 amount)
         internal
         returns (bool exceeded)
     {
@@ -1193,14 +1254,14 @@ contract MerchantPayments {
             vw.totalAmount  = 0;
         }
 
-        // Check limit before incrementing.
-        if (vw.paymentCount >= cfg.maxPaymentsPerWindow) {
-            return true;
-        }
+        // A breach is when the cap was already reached before counting this one.
+        exceeded = (vw.paymentCount >= cfg.maxPaymentsPerWindow);
 
-        // Increment window counters.
+        // Always record this payment in the window.
         vw.paymentCount += 1;
-        return false;
+        vw.totalAmount  += amount;
+
+        return exceeded;
     }
 
     /**
