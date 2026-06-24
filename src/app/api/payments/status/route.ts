@@ -1,13 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 
-interface MockPayment {
-  paymentId: string
-  txHash: string
-  amount: number
-  payer: string
-  merchant: string
-  status: string
-  classification: string
+import type { Payment } from '@/types'
+
+type MockPayment = Pick<Payment, 'paymentId'|'txHash'|'amount'|'payer'|'merchant'|'status'|'classification'> & {
   createdAt: number
 }
 
@@ -18,8 +13,8 @@ const MOCK_PAYMENTS: MockPayment[] = [
     amount: 1500,
     payer: '0xPayer1',
     merchant: '0xMerchant1',
-    status: 'COMPLETED',
-    classification: 'invoice',
+    status: 'WEBHOOK_DELIVERED',
+    classification: 'STANDARD',
     createdAt: Date.now() - 86400000,
   },
   {
@@ -29,7 +24,7 @@ const MOCK_PAYMENTS: MockPayment[] = [
     payer: '0xPayer2',
     merchant: '0xMerchant1',
     status: 'PENDING',
-    classification: 'subscription',
+    classification: 'HIGH_VALUE',
     createdAt: Date.now() - 43200000,
   },
   {
@@ -38,8 +33,8 @@ const MOCK_PAYMENTS: MockPayment[] = [
     amount: 800,
     payer: '0xPayer3',
     merchant: '0xMerchant2',
-    status: 'FAILED',
-    classification: 'one-time',
+    status: 'WEBHOOK_FAILED',
+    classification: 'SUSPICIOUS',
     createdAt: Date.now() - 21600000,
   },
 ]

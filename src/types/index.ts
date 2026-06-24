@@ -1,18 +1,25 @@
 export interface Payment {
   paymentId: string
   payer: string
+  merchant: string
   amount: number
-  token: string
+  tokenAddress: string
   timestamp: number
-  status: 'PENDING'|'CONFIRMED'|'CLASSIFIED'|'SYNCED'|'WEBHOOK_DELIVERED'|'WEBHOOK_FAILED'|'REFUNDED'
-  classification: 'STANDARD'|'HIGH_VALUE'|'SUSPICIOUS'|'UNCLASSIFIED'
+  blockNumber: number
+  status: 'PENDING'|'CONFIRMED'|'CLASSIFIED'|'SYNCED'|'WEBHOOK_DELIVERED'|'WEBHOOK_FAILED'|'REFUNDED'|'DISPUTED'
+  classification: 'UNCLASSIFIED'|'STANDARD'|'HIGH_VALUE'|'SUSPICIOUS'|'BLOCKED'
   txHash: string
+  metadata: string
   webhookRetryCount: number
+  lastWebhookAttempt: number
+  syncedAt: number
   syncLatencyMs: number
+  refunded: boolean
+  refundAmount: number
   countryCode: string
+  currencyCode: string
   processorFee: number
   networkFee: number
-  blockNumber: number
 }
 
 export interface SyncStatusData {
