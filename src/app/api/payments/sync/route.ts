@@ -1,4 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
+import fs from 'fs'
+import path from 'path'
+
+import type { Payment } from '@/types'
+
+const PAYMENTS_FILE = path.join(process.cwd(), 'src/data/payments.json')
 
 interface SyncPaymentBody {
   paymentId: string
@@ -10,6 +16,25 @@ interface SyncPaymentBody {
   syncLatencyMs: number
   dbSynced: boolean
   webhookDelivered: boolean
+  tokenAddress?: string
+  timestamp?: number
+  blockNumber?: number
+  metadata?: string
+  countryCode?: string
+  currencyCode?: string
+}
+
+function readPayments(): Payment[] {
+  try {
+    const raw = fs.readFileSync(PAYMENTS_FILE, 'utf8')
+    return JSON.parse(raw) as Payment[]
+  } catch {
+    return []
+  }
+}
+
+function writePayments(payments: Payment[]): void {
+  fs.writeFileSync(PAYMENTS_FILE, JSON.stringify(payments, null, 2), 'utf8')
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
@@ -24,7 +49,11 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     )
   }
 
-  const { paymentId, txHash, amount, payer, merchant, classification, syncLatencyMs, dbSynced, webhookDelivered } = body
+  const {
+    paymentId, txHash, amount, payer, merchant, classification,
+    syncLatencyMs, dbSynced, webhookDelivered,
+    tokenAddress, timestamp, blockNumber, metadata, countryCode, currencyCode,
+  } = body
 
   const missingFields: string[] = []
   if (!paymentId) missingFields.push('paymentId')
@@ -43,53 +72,67 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     )
   }
 
+  const syncedAt = Date.now()
+
+  const payments = readPayments()
+  const existingIdx = payments.findIndex((p) => p.paymentId === paymentId)
+
+  const status: Payment['status'] = webhookDelivered
+    ? 'WEBHOOK_DELIVERED'
+    : dbSynced
+      ? 'SYNCED'
+      : 'CONFIRMED'
+
+  if (existingIdx >= 0) {
+    // Update existing record
+    payments[existingIdx] = {
+      ...payments[existingIdx],
+      classification: classification!,
+      status,
+      syncLatencyMs: syncLatencyMs!,
+      syncedAt,
+      ...(txHash ? { txHash } : {}),
+      ...(webhookDelivered !== undefined ? { webhookDelivered } : {}),
+    }
+  } else {
+    // Insert new record from Kwala sync payload
+    const newPayment: Payment = {
+      paymentId: paymentId!,
+      payer: payer!,
+      merchant: merchant!,
+      amount: amount!,
+      tokenAddress: tokenAddress ?? '',
+      timestamp: timestamp ?? syncedAt,
+      blockNumber: blockNumber ?? 0,
+      status,
+      classification: classification!,
+      txHash: txHash ?? '',
+      metadata: metadata ?? '',
+      webhookRetryCount: 0,
+      lastWebhookAttempt: 0,
+      syncedAt,
+      syncLatencyMs: syncLatencyMs!,
+      refunded: false,
+      refundAmount: 0,
+      countryCode: countryCode ?? 'USD',
+      currencyCode: currencyCode ?? 'USD',
+      processorFee: 0,
+      networkFee: 0,
+    }
+    payments.unshift(newPayment)
+  }
+
+  writePayments(payments)
+
   return NextResponse.json({
     success: true,
     paymentId,
-    syncedAt: Date.now(),
+    syncedAt,
     message: 'Payment synced',
   })
 }
 
 export async function GET(): Promise<NextResponse> {
-  const payments = [
-    {
-      paymentId: 'pay_001',
-      txHash: '0xabc123',
-      amount: 1500,
-      payer: '0xPayer1',
-      merchant: '0xMerchant1',
-      classification: 'STANDARD',
-      syncLatencyMs: 120,
-      dbSynced: true,
-      webhookDelivered: true,
-      syncedAt: Date.now() - 60000,
-    },
-    {
-      paymentId: 'pay_002',
-      txHash: '0xdef456',
-      amount: 3200,
-      payer: '0xPayer2',
-      merchant: '0xMerchant1',
-      classification: 'HIGH_VALUE',
-      syncLatencyMs: 95,
-      dbSynced: true,
-      webhookDelivered: false,
-      syncedAt: Date.now() - 120000,
-    },
-    {
-      paymentId: 'pay_003',
-      txHash: '0xghi789',
-      amount: 800,
-      payer: '0xPayer3',
-      merchant: '0xMerchant2',
-      classification: 'STANDARD',
-      syncLatencyMs: 200,
-      dbSynced: true,
-      webhookDelivered: true,
-      syncedAt: Date.now() - 300000,
-    },
-  ]
-
+  const payments = readPayments()
   return NextResponse.json({ success: true, payments })
 }
