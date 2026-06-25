@@ -259,7 +259,7 @@ export default function LivePaymentFeed({ payments }: LivePaymentFeedProps) {
                     letterSpacing: '0.02em',
                   }}
                 >
-                  {formatTimeAgo(p.timestamp)} · {statusLabel(p)}
+                  {formatTimeAgo(p.timestamp * 1000)} · {statusLabel(p)}
                 </span>
               </div>
 
@@ -275,7 +275,7 @@ export default function LivePaymentFeed({ payments }: LivePaymentFeedProps) {
                   flexShrink: 0,
                 }}
               >
-                ${p.amount.toLocaleString()}
+                ${(p.amount / 1e6).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
               </span>
             </div>
           );
