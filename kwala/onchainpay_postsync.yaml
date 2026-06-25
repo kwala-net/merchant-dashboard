@@ -44,13 +44,16 @@ Actions:
     Type: post
     APIEndpoint: "https://example.com/api/payments/sync"
     APIPayload:
-      # Populate with event fields — re.event(N) interpolates the Nth param of PaymentClassified:
-      #   re.event(0) = paymentId (bytes32)
-      #   re.event(1) = classification (uint8: 1=STANDARD 2=HIGH_VALUE 3=SUSPICIOUS)
-      #   re.event(2) = merchant (address)
-      #   re.event(3) = amount (uint256)
-      # Also add dbSynced and webhookDelivered booleans required by recordSync() on-chain.
-      Message: "{}"
+      # re.event(N) interpolates the Nth param of PaymentClassified(bytes32,uint8,address,uint256):
+      #   re.event(0) = paymentId     bytes32 — hex string e.g. 0xabc...
+      #   re.event(1) = classification uint8  — raw int: 0=UNCLASSIFIED 1=STANDARD 2=HIGH_VALUE 3=SUSPICIOUS 4=BLOCKED
+      #   re.event(2) = merchant       address
+      #   re.event(3) = amount         uint256 — token units (e.g. 500000000 = 500 USDC at 6 decimals)
+      #
+      # amount and classification are unquoted so Kwala sends them as JSON numbers, not strings.
+      # The /api/payments/sync route maps the numeric classification to its string enum.
+      # payer is not in this event; the route makes it optional and preserves it from existing records.
+      Message: '{"paymentId":"re.event(0)","merchant":"re.event(2)","amount":re.event(3),"classification":re.event(1),"syncLatencyMs":0,"dbSynced":true,"webhookDelivered":false}'
     TargetContract: NA
     TargetFunction: NA
     TargetParams: NA
@@ -65,9 +68,9 @@ Actions:
     Type: post
     APIEndpoint: "https://example.com/api/webhook/kwala"
     APIPayload:
-      # Minimum fields required by /api/webhook/kwala:
-      #   paymentId, event ("PaymentClassified"), data, signature
-      Message: "{}"
+      # Required by /api/webhook/kwala: paymentId, event, signature (data is optional).
+      # signature is presence-checked only (no real HMAC yet) — any non-empty string passes.
+      Message: '{"paymentId":"re.event(0)","event":"PaymentClassified","signature":"kwala-sig","data":{"classification":re.event(1),"merchant":"re.event(2)","amount":re.event(3)}}'
     TargetContract: NA
     TargetFunction: NA
     TargetParams: NA

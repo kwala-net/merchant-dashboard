@@ -40,15 +40,29 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   }
 
   const {
-    paymentId, txHash, amount, payer, merchant, classification,
+    paymentId, txHash, payer, merchant,
     syncLatencyMs, dbSynced, webhookDelivered,
     tokenAddress, timestamp, blockNumber, metadata, countryCode, currencyCode,
   } = body
 
+  // Kwala sends classification as a raw uint8 integer (e.g. 1); accept both forms.
+  const CLASS_MAP: Record<string, Payment['classification']> = {
+    UNCLASSIFIED: 'UNCLASSIFIED', '0': 'UNCLASSIFIED',
+    STANDARD:     'STANDARD',     '1': 'STANDARD',
+    HIGH_VALUE:   'HIGH_VALUE',   '2': 'HIGH_VALUE',
+    SUSPICIOUS:   'SUSPICIOUS',   '3': 'SUSPICIOUS',
+    BLOCKED:      'BLOCKED',      '4': 'BLOCKED',
+  }
+  const classification = CLASS_MAP[String(body.classification ?? '')]
+
+  // Kwala sends amount as a raw uint256 integer; coerce to JS number.
+  const amount = body.amount !== undefined && body.amount !== null
+    ? Number(body.amount)
+    : undefined
+
   const missingFields: string[] = []
   if (!paymentId) missingFields.push('paymentId')
-  if (amount === undefined || amount === null) missingFields.push('amount')
-  if (!payer) missingFields.push('payer')
+  if (amount === undefined || isNaN(amount)) missingFields.push('amount')
   if (!merchant) missingFields.push('merchant')
   if (!classification) missingFields.push('classification')
   if (syncLatencyMs === undefined || syncLatencyMs === null) missingFields.push('syncLatencyMs')
@@ -87,7 +101,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   } else {
     const newPayment: Payment = {
       paymentId: paymentId!,
-      payer: payer!,
+      payer: payer ?? '',
       merchant: merchant!,
       amount: amount!,
       tokenAddress: tokenAddress ?? '',
