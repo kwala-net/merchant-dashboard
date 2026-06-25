@@ -3,13 +3,6 @@ import { redis } from '@/lib/redis'
 
 const WEBHOOK_KEY = 'webhookAttempts'
 
-interface KwalaWebhookBody {
-  paymentId: string
-  event: string
-  data: unknown
-  signature?: string
-}
-
 interface WebhookAttempt {
   id: string
   paymentId: string
@@ -20,65 +13,42 @@ interface WebhookAttempt {
   error?: string
 }
 
+function parseBody(raw: unknown): Record<string, unknown> {
+  if (typeof raw === 'string') {
+    try { return JSON.parse(raw) } catch { return {} }
+  }
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    return raw as Record<string, unknown>
+  }
+  return {}
+}
+
 async function appendAttempt(attempt: WebhookAttempt): Promise<void> {
   await redis.lpush(WEBHOOK_KEY, attempt)
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
-  let body: Partial<KwalaWebhookBody>
-
+  let body: Record<string, unknown> = {}
   try {
-    body = await request.json()
+    body = parseBody(await request.json())
   } catch {
-    return NextResponse.json(
-      { received: false, error: 'Invalid JSON body' },
-      { status: 400 }
-    )
+    // unparseable body — still log and respond
   }
 
-  const { paymentId, event, data } = body
-
-  if (!paymentId || !event) {
-    return NextResponse.json(
-      { received: false, error: 'Missing required fields: paymentId, event' },
-      { status: 400 }
-    )
-  }
+  const paymentId = String(body.paymentId ?? '')
+  const event     = String(body.event ?? 'PaymentClassified')
+  const data      = body.data ?? null
 
   const receivedAt = Date.now()
-  const attemptId = `wh_${paymentId}_${receivedAt}`
+  const attemptId  = `wh_${paymentId || 'unknown'}_${receivedAt}`
 
   // Simulate 20% failure rate for retry resilience testing
   if (Math.random() < 0.2) {
-    await appendAttempt({
-      id: attemptId,
-      paymentId,
-      event,
-      data: data ?? null,
-      receivedAt,
-      success: false,
-      error: 'Upstream webhook processing failed',
-    })
-    return NextResponse.json(
-      { received: false, error: 'Upstream webhook processing failed' },
-      { status: 502 }
-    )
+    await appendAttempt({ id: attemptId, paymentId, event, data, receivedAt, success: false, error: 'Simulated upstream failure' })
+    return NextResponse.json({ received: false, error: 'Simulated upstream failure' }, { status: 502 })
   }
 
-  appendAttempt({
-    id: attemptId,
-    paymentId,
-    event,
-    data: data ?? null,
-    receivedAt,
-    success: true,
-  })
+  await appendAttempt({ id: attemptId, paymentId, event, data, receivedAt, success: true })
 
-  return NextResponse.json({
-    received: true,
-    paymentId,
-    event,
-    data: data ?? null,
-    processedAt: receivedAt,
-  })
+  return NextResponse.json({ received: true, paymentId, event, processedAt: receivedAt })
 }
