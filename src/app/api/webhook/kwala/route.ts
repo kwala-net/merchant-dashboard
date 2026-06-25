@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
-import fs from 'fs'
-import path from 'path'
+import { redis } from '@/lib/redis'
 
-const WEBHOOK_LOG_FILE = path.join(process.cwd(), 'src/data/webhookAttempts.json')
+const WEBHOOK_KEY = 'webhookAttempts'
 
 interface KwalaWebhookBody {
   paymentId: string
@@ -21,19 +20,8 @@ interface WebhookAttempt {
   error?: string
 }
 
-function readAttempts(): WebhookAttempt[] {
-  try {
-    const raw = fs.readFileSync(WEBHOOK_LOG_FILE, 'utf8')
-    return JSON.parse(raw) as WebhookAttempt[]
-  } catch {
-    return []
-  }
-}
-
-function appendAttempt(attempt: WebhookAttempt): void {
-  const attempts = readAttempts()
-  attempts.unshift(attempt)
-  fs.writeFileSync(WEBHOOK_LOG_FILE, JSON.stringify(attempts, null, 2), 'utf8')
+async function appendAttempt(attempt: WebhookAttempt): Promise<void> {
+  await redis.lpush(WEBHOOK_KEY, attempt)
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
@@ -69,7 +57,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
   // Simulate 20% failure rate for retry resilience testing
   if (Math.random() < 0.2) {
-    appendAttempt({
+    await appendAttempt({
       id: attemptId,
       paymentId,
       event,

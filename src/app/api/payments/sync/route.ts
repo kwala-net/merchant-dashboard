@@ -1,10 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
-import fs from 'fs'
-import path from 'path'
+import { redis } from '@/lib/redis'
 
 import type { Payment } from '@/types'
 
-const PAYMENTS_FILE = path.join(process.cwd(), 'src/data/payments.json')
+const PAYMENTS_KEY = 'payments'
 
 interface SyncPaymentBody {
   paymentId: string
@@ -24,17 +23,8 @@ interface SyncPaymentBody {
   currencyCode?: string
 }
 
-function readPayments(): Payment[] {
-  try {
-    const raw = fs.readFileSync(PAYMENTS_FILE, 'utf8')
-    return JSON.parse(raw) as Payment[]
-  } catch {
-    return []
-  }
-}
-
-function writePayments(payments: Payment[]): void {
-  fs.writeFileSync(PAYMENTS_FILE, JSON.stringify(payments, null, 2), 'utf8')
+async function readPayments(): Promise<Payment[]> {
+  return redis.lrange<Payment>(PAYMENTS_KEY, 0, -1)
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
@@ -74,7 +64,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
   const syncedAt = Date.now()
 
-  const payments = readPayments()
+  const payments = await readPayments()
   const existingIdx = payments.findIndex((p) => p.paymentId === paymentId)
 
   const status: Payment['status'] = webhookDelivered
@@ -84,8 +74,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       : 'CONFIRMED'
 
   if (existingIdx >= 0) {
-    // Update existing record
-    payments[existingIdx] = {
+    const updated: Payment = {
       ...payments[existingIdx],
       classification: classification!,
       status,
@@ -94,8 +83,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       ...(txHash ? { txHash } : {}),
       ...(webhookDelivered !== undefined ? { webhookDelivered } : {}),
     }
+    await redis.lset(PAYMENTS_KEY, existingIdx, updated)
   } else {
-    // Insert new record from Kwala sync payload
     const newPayment: Payment = {
       paymentId: paymentId!,
       payer: payer!,
@@ -119,10 +108,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       processorFee: 0,
       networkFee: 0,
     }
-    payments.unshift(newPayment)
+    await redis.lpush(PAYMENTS_KEY, newPayment)
   }
-
-  writePayments(payments)
 
   return NextResponse.json({
     success: true,
@@ -133,6 +120,6 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 }
 
 export async function GET(): Promise<NextResponse> {
-  const payments = readPayments()
+  const payments = await readPayments()
   return NextResponse.json({ success: true, payments })
 }

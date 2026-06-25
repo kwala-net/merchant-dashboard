@@ -1,5 +1,3 @@
-'use client'
-
 import {
   StatsCard,
   LivePaymentFeed,
@@ -10,22 +8,22 @@ import {
 } from '@/components'
 
 import type { Payment, SyncStatusData, VolumeDataPoint, ApiEndpoint, KwalaEvent, MerchantStats } from '@/types'
+import { redis } from '@/lib/redis'
 
 import merchantStats from '@/data/merchantStats.json'
-import payments from '@/data/payments.json'
 import syncStatus from '@/data/syncStatus.json'
 import volumeChart from '@/data/volumeChart.json'
 import apiHealth from '@/data/apiHealth.json'
 import kwalaEvents from '@/data/kwalaEvents.json'
 
 const stats = merchantStats as MerchantStats
-const paymentsData = payments as Payment[]
 const syncData = syncStatus as SyncStatusData
 const volumeData = volumeChart as VolumeDataPoint[]
 const apiEndpoints = apiHealth as ApiEndpoint[]
 const kwalaEventsData = kwalaEvents as KwalaEvent[]
 
-export default function DashboardPage() {
+export default async function DashboardPage() {
+  const paymentsData = await redis.lrange<Payment>('payments', 0, -1)
   return (
     <div
       style={{
