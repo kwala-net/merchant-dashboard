@@ -7,7 +7,7 @@ interface KwalaWebhookBody {
   paymentId: string
   event: string
   data: unknown
-  signature: string
+  signature?: string
 }
 
 interface WebhookAttempt {
@@ -36,14 +36,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     )
   }
 
-  const { paymentId, event, data, signature } = body
-
-  if (!signature) {
-    return NextResponse.json(
-      { received: false, error: 'Missing required field: signature' },
-      { status: 400 }
-    )
-  }
+  const { paymentId, event, data } = body
 
   if (!paymentId || !event) {
     return NextResponse.json(
