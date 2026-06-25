@@ -3,27 +3,136 @@ import {
   LivePaymentFeed,
   SyncStatus,
   VolumeChart,
-  ApiHealthTable,
   KwalaWorkflowEvents,
 } from '@/components'
 
-import type { Payment, SyncStatusData, VolumeDataPoint, ApiEndpoint, KwalaEvent, MerchantStats } from '@/types'
+import type { Payment, SyncStatusData, VolumeDataPoint, KwalaEvent, MerchantStats } from '@/types'
 import { redis } from '@/lib/redis'
 
-import merchantStats from '@/data/merchantStats.json'
-import syncStatus from '@/data/syncStatus.json'
-import volumeChart from '@/data/volumeChart.json'
-import apiHealth from '@/data/apiHealth.json'
-import kwalaEvents from '@/data/kwalaEvents.json'
+interface WebhookAttempt {
+  id: string
+  paymentId: string
+  success: boolean
+}
 
-const stats = merchantStats as MerchantStats
-const syncData = syncStatus as SyncStatusData
-const volumeData = volumeChart as VolumeDataPoint[]
-const apiEndpoints = apiHealth as ApiEndpoint[]
-const kwalaEventsData = kwalaEvents as KwalaEvent[]
+const CLASS_COLOR: Record<string, KwalaEvent['tagColor']> = {
+  STANDARD: 'green',
+  HIGH_VALUE: 'blue',
+  SUSPICIOUS: 'red',
+  BLOCKED: 'red',
+  UNCLASSIFIED: 'yellow',
+}
+
+function computeStats(payments: Payment[], attempts: WebhookAttempt[]): MerchantStats {
+  const nowMs = Date.now()
+  const oneDayAgoMs = nowMs - 86_400_000
+
+  const payments24h = payments.filter(p => p.timestamp * 1000 >= oneDayAgoMs)
+  const volume24h = payments24h.reduce((s, p) => s + p.amount, 0) / 1e6
+
+  const successful = payments.filter(p =>
+    ['CONFIRMED', 'CLASSIFIED', 'SYNCED', 'WEBHOOK_DELIVERED'].includes(p.status)
+  ).length
+  const successRate = payments.length > 0 ? Math.round((successful / payments.length) * 100) : 100
+
+  const withLatency = payments.filter(p => p.syncLatencyMs > 0)
+  const avgSyncLag = withLatency.length > 0
+    ? Math.round(withLatency.reduce((s, p) => s + p.syncLatencyMs, 0) / withLatency.length)
+    : 0
+
+  return {
+    volume24h: Math.round(volume24h * 100) / 100,
+    volume24hChange: 0,
+    totalPayments: payments.length,
+    successRate,
+    webhookCalls: attempts.length,
+    webhookFailed: attempts.filter(a => !a.success).length,
+    syncLagMs: avgSyncLag,
+    merchantAddress: payments[0]?.merchant ?? '',
+    merchantName: 'Seed Merchant',
+    tier: 'ENTERPRISE',
+  }
+}
+
+function computeSyncStatus(payments: Payment[], attempts: WebhookAttempt[]): SyncStatusData {
+  const total = payments.length
+  if (total === 0) {
+    return {
+      paymentEventsCapture: { completed: 0, total: 0 },
+      kwalaFunctionProcessed: { completed: 0, total: 0 },
+      backendDbSynced: { completed: 0, total: 0 },
+      webhookDelivered: { completed: 0, total: 0 },
+      merchantDashboardUpdated: { completed: 0, total: 0 },
+      pendingKwalaRetry: 0,
+      avgSyncLatencyMs: 0,
+    }
+  }
+
+  const classified = payments.filter(p => p.classification !== 'UNCLASSIFIED').length
+  const dbSynced = payments.filter(p => p.syncedAt > 0).length
+  const webhookDelivered = payments.filter(p => p.status === 'WEBHOOK_DELIVERED').length
+
+  const withLatency = payments.filter(p => p.syncLatencyMs > 0)
+  const avgSyncLatencyMs = withLatency.length > 0
+    ? Math.round(withLatency.reduce((s, p) => s + p.syncLatencyMs, 0) / withLatency.length)
+    : 0
+
+  return {
+    paymentEventsCapture: { completed: total, total },
+    kwalaFunctionProcessed: { completed: classified, total },
+    backendDbSynced: { completed: dbSynced, total },
+    webhookDelivered: { completed: webhookDelivered, total },
+    merchantDashboardUpdated: { completed: total, total },
+    pendingKwalaRetry: attempts.filter(a => !a.success).length,
+    avgSyncLatencyMs,
+  }
+}
+
+function computeVolumeChart(payments: Payment[]): VolumeDataPoint[] {
+  const nowMs = Date.now()
+  return Array.from({ length: 12 }, (_, i) => {
+    const bucketEndMs = nowMs - i * 3_600_000
+    const bucketStartMs = bucketEndMs - 3_600_000
+    const bucket = payments.filter(p => {
+      const tsMs = p.timestamp * 1000
+      return tsMs >= bucketStartMs && tsMs < bucketEndMs
+    })
+    return {
+      hour: new Date(bucketEndMs).toLocaleTimeString('en-US', {
+        hour: '2-digit', minute: '2-digit', hour12: false,
+      }),
+      usdcVolume: Math.round(bucket.reduce((s, p) => s + p.amount, 0) / 1e6 * 100) / 100,
+      txCount: bucket.length,
+    }
+  }).reverse()
+}
+
+function computeKwalaEvents(payments: Payment[]): KwalaEvent[] {
+  return payments.slice(0, 8).map(p => ({
+    id: p.paymentId.slice(0, 18),
+    name: p.classification === 'UNCLASSIFIED' ? 'PaymentReceived' : 'PaymentClassified',
+    subtitle: `${(p.amount / 1e6).toFixed(2)} USDC · ${p.classification}`,
+    tag: p.classification,
+    tagColor: CLASS_COLOR[p.classification] ?? 'yellow',
+    status: (
+      p.status === 'WEBHOOK_DELIVERED' ? 'success' :
+      p.status === 'WEBHOOK_FAILED' ? 'failed' :
+      'pending'
+    ) as KwalaEvent['status'],
+  }))
+}
 
 export default async function DashboardPage() {
-  const paymentsData = await redis.lrange<Payment>('payments', 0, -1)
+  const [paymentsData, attemptsData] = await Promise.all([
+    redis.lrange<Payment>('payments', 0, -1),
+    redis.lrange<WebhookAttempt>('webhookAttempts', 0, -1),
+  ])
+
+  const stats = computeStats(paymentsData, attemptsData)
+  const syncData = computeSyncStatus(paymentsData, attemptsData)
+  const volumeData = computeVolumeChart(paymentsData)
+  const kwalaEventsData = computeKwalaEvents(paymentsData)
+
   return (
     <div
       style={{
@@ -47,7 +156,6 @@ export default async function DashboardPage() {
           zIndex: 10,
         }}
       >
-        {/* Left: Brand */}
         <span
           style={{
             fontWeight: 700,
@@ -59,7 +167,6 @@ export default async function DashboardPage() {
           OnchainPay — merchant dashboard
         </span>
 
-        {/* Right: Kwala live badge */}
         <div
           style={{
             display: 'inline-flex',
@@ -71,7 +178,6 @@ export default async function DashboardPage() {
             padding: '5px 12px 5px 10px',
           }}
         >
-          {/* Pulsing green dot */}
           <span
             style={{
               position: 'relative',
@@ -124,7 +230,6 @@ export default async function DashboardPage() {
         </div>
       </header>
 
-      {/* Main Content */}
       <main
         style={{
           maxWidth: '1400px',
@@ -169,7 +274,7 @@ export default async function DashboardPage() {
           />
         </div>
 
-        {/* Middle Row: Live Payment Feed | Sync Status */}
+        {/* Live Payment Feed | Sync Status */}
         <div
           style={{
             display: 'grid',
@@ -181,7 +286,7 @@ export default async function DashboardPage() {
           <SyncStatus syncData={syncData} />
         </div>
 
-        {/* Full-width Volume Chart */}
+        {/* Volume Chart */}
         <div
           style={{
             background: '#111111',
@@ -193,7 +298,7 @@ export default async function DashboardPage() {
           <VolumeChart data={volumeData} />
         </div>
 
-        {/* Bottom Row: API Health | Kwala Workflow Events */}
+        {/* Kwala Workflow Events */}
         <div
           style={{
             display: 'grid',
@@ -201,7 +306,6 @@ export default async function DashboardPage() {
             gap: '16px',
           }}
         >
-          <ApiHealthTable endpoints={apiEndpoints} />
           <KwalaWorkflowEvents events={kwalaEventsData} />
         </div>
       </main>
