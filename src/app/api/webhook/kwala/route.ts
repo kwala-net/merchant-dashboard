@@ -13,13 +13,24 @@ interface WebhookAttempt {
   error?: string
 }
 
+function parseKwalaMessage(msg: string): Record<string, unknown> {
+  // Kwala sends Python-style dict: single quotes + unquoted bytes32 hex values
+  const json = msg
+    .replace(/'/g, '"')                             // single → double quotes
+    .replace(/:(\s*)(0x[0-9a-fA-F]+)/g, ':"$2"')  // quote bare 0x… values
+  return JSON.parse(json)
+}
+
 function parseBody(raw: unknown): Record<string, unknown> {
-  if (typeof raw === 'string') {
-    try { return JSON.parse(raw) } catch { return {} }
-  }
-  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
-    return raw as Record<string, unknown>
-  }
+  try {
+    if (typeof raw === 'string') return parseKwalaMessage(raw)
+    if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+      const obj = raw as Record<string, unknown>
+      // Kwala wraps payload as {"Message": "<python-dict-string>"}
+      if (typeof obj.Message === 'string') return parseKwalaMessage(obj.Message)
+      return obj
+    }
+  } catch { /* fall through */ }
   return {}
 }
 
